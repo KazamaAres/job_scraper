@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+*.pyc
+jobs_seen.json
+jobs_today.html
+scraper.log
