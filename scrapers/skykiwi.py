@@ -1,8 +1,9 @@
-import requests
-from bs4 import BeautifulSoup
+import random
 import re
 import time
 import logging
+import requests
+from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
@@ -13,13 +14,35 @@ HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
+        "Chrome/124.0.0.0 Safari/537.36"
     ),
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
     "Referer": BASE_URL,
 }
 
 EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
+
+# Separate connect and read timeouts: fail fast if server unreachable
+TIMEOUT = (5, 20)
+MAX_RETRIES = 2
+
+
+def _get_with_retry(session: requests.Session, url: str) -> requests.Response | None:
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            resp = session.get(url, timeout=TIMEOUT)
+            resp.raise_for_status()
+            return resp
+        except requests.ConnectionError as e:
+            logger.warning(f"SkyKiwi connection error (attempt {attempt}/{MAX_RETRIES}): {e}")
+        except requests.Timeout as e:
+            logger.warning(f"SkyKiwi timeout (attempt {attempt}/{MAX_RETRIES}): {e}")
+        except requests.RequestException as e:
+            logger.error(f"SkyKiwi request error: {e}")
+            return None
+        if attempt < MAX_RETRIES:
+            time.sleep(3)
+    return None
 
 
 def _extract_email(text: str) -> str:
@@ -29,7 +52,6 @@ def _extract_email(text: str) -> str:
 
 def _parse_listing_page(soup) -> list[dict]:
     jobs = []
-    # SkyKiwi listing rows — adjust selectors if the site updates its structure
     items = soup.select("ul.info-list li, div.list-item, table.list-table tr")
 
     for item in items:
@@ -50,9 +72,11 @@ def _parse_listing_page(soup) -> list[dict]:
         if title:
             jobs.append({
                 "title": title,
+                "company": "",
+                "location": "Auckland",
+                "salary": "",
                 "link": link,
                 "date": date,
-                "summary": summary,
                 "email": _extract_email(summary),
                 "source": "skykiwi.com",
             })
@@ -61,34 +85,32 @@ def _parse_listing_page(soup) -> list[dict]:
 
 
 def _fetch_detail(session: requests.Session, job: dict) -> dict:
+    resp = _get_with_retry(session, job["link"])
+    if not resp:
+        return job
     try:
-        resp = session.get(job["link"], timeout=15)
-        resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
-
         content_tag = soup.select_one("div.content, div.article-content, div#content")
         if content_tag:
             text = content_tag.get_text(separator=" ", strip=True)
             job["summary"] = text[:500]
-            job["email"] = _extract_email(text) or job["email"]
+            job["email"] = _extract_email(text) or job.get("email", "")
     except Exception as e:
-        logger.warning(f"Failed to fetch SkyKiwi detail {job['link']}: {e}")
+        logger.warning(f"Failed to parse SkyKiwi detail {job['link']}: {e}")
     return job
 
 
-def scrape_skykiwi(max_pages: int = 5, fetch_details: bool = True) -> list[dict]:
+def scrape_skykiwi(max_pages: int = 3, fetch_details: bool = True) -> list[dict]:
     session = requests.Session()
     session.headers.update(HEADERS)
     all_jobs = []
-    seen_links = set()
+    seen_links: set[str] = set()
 
     for page in range(1, max_pages + 1):
         url = JOBS_URL if page == 1 else f"{JOBS_URL}?page={page}"
-        try:
-            resp = session.get(url, timeout=15)
-            resp.raise_for_status()
-        except requests.RequestException as e:
-            logger.error(f"SkyKiwi request failed on page {page}: {e}")
+        resp = _get_with_retry(session, url)
+        if not resp:
+            logger.error(f"SkyKiwi unreachable at page {page}, skipping.")
             break
 
         soup = BeautifulSoup(resp.text, "html.parser")
@@ -104,13 +126,13 @@ def scrape_skykiwi(max_pages: int = 5, fetch_details: bool = True) -> list[dict]
                 all_jobs.append(job)
 
         logger.info(f"SkyKiwi page {page}: {len(jobs)} items")
-        time.sleep(1.5)
+        time.sleep(random.uniform(1.0, 2.5))
 
-    if fetch_details:
+    if fetch_details and all_jobs:
         for job in all_jobs:
             if not job.get("summary"):
                 _fetch_detail(session, job)
-                time.sleep(1)
+                time.sleep(random.uniform(0.5, 1.5))
 
     logger.info(f"SkyKiwi total unique jobs: {len(all_jobs)}")
     return all_jobs
