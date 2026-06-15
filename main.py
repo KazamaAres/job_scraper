@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -7,7 +8,7 @@ from config import SEEK_KEYWORDS, SEEK_LOCATION, SEEN_JOBS_FILE
 from scrapers.seek import scrape_all_keywords
 from scrapers.skykiwi import scrape_skykiwi
 from matcher import match_jobs
-from notifier import save_and_open
+from notifier import save_html, save_and_open
 
 logging.basicConfig(
     level=logging.INFO,
@@ -18,6 +19,8 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger(__name__)
+
+IS_CI = os.getenv("CI") == "true"
 
 
 def load_seen_jobs(path: str) -> set[str]:
@@ -44,36 +47,45 @@ def deduplicate(jobs: list[dict], seen: set[str]) -> list[dict]:
 
 
 def main():
-    logger.info("=== Job Scraper started ===")
+    logger.info(f"=== Job Scraper started (CI={IS_CI}) ===")
 
-    seen = load_seen_jobs(SEEN_JOBS_FILE)
-    logger.info(f"Loaded {len(seen)} previously seen jobs")
+    try:
+        logger.info("Scraping Seek...")
+        seek_jobs = scrape_all_keywords(SEEK_KEYWORDS, location=SEEK_LOCATION)
+    except Exception as e:
+        logger.error(f"Seek scraping failed: {e}")
+        seek_jobs = []
 
-    # 1. Scrape
-    logger.info("Scraping Seek...")
-    seek_jobs = scrape_all_keywords(SEEK_KEYWORDS, location=SEEK_LOCATION)
-
-    logger.info("Scraping SkyKiwi...")
-    skykiwi_jobs = scrape_skykiwi(max_pages=5, fetch_details=True)
+    try:
+        logger.info("Scraping SkyKiwi...")
+        skykiwi_jobs = scrape_skykiwi(max_pages=5, fetch_details=True)
+    except Exception as e:
+        logger.error(f"SkyKiwi scraping failed: {e}")
+        skykiwi_jobs = []
 
     all_jobs = seek_jobs + skykiwi_jobs
     logger.info(f"Total scraped: {len(all_jobs)} jobs")
 
-    # 2. Match
     matched = match_jobs(all_jobs)
     logger.info(f"Matched: {len(matched)} jobs")
 
-    # 3. Deduplicate
-    new_jobs = deduplicate(matched, seen)
-    logger.info(f"New (unseen): {len(new_jobs)} jobs")
-
-    # 4. Save HTML and open browser
-    if new_jobs:
-        save_and_open(new_jobs)
-        save_seen_jobs(seen, SEEN_JOBS_FILE)
-        logger.info(f"Saved {len(seen)} total seen URLs")
+    if IS_CI:
+        # In CI, always write HTML with all matched jobs (no deduplication)
+        save_html(matched)
     else:
-        logger.info("No new jobs found.")
+        # Local: deduplicate against seen jobs, open browser for new ones
+        seen = load_seen_jobs(SEEN_JOBS_FILE)
+        logger.info(f"Loaded {len(seen)} previously seen jobs")
+
+        new_jobs = deduplicate(matched, seen)
+        logger.info(f"New (unseen): {len(new_jobs)} jobs")
+
+        if new_jobs:
+            save_and_open(new_jobs)
+            save_seen_jobs(seen, SEEN_JOBS_FILE)
+            logger.info(f"Saved {len(seen)} total seen URLs")
+        else:
+            logger.info("No new jobs found.")
 
     logger.info("=== Job Scraper finished ===")
 

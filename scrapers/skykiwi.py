@@ -22,9 +22,9 @@ HEADERS = {
 
 EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
 
-# Separate connect and read timeouts: fail fast if server unreachable
-TIMEOUT = (5, 20)
-MAX_RETRIES = 2
+# Separate connect and read timeouts
+TIMEOUT = (10, 30)
+MAX_RETRIES = 3
 
 
 def _get_with_retry(session: requests.Session, url: str) -> requests.Response | None:
@@ -41,7 +41,7 @@ def _get_with_retry(session: requests.Session, url: str) -> requests.Response | 
             logger.error(f"SkyKiwi request error: {e}")
             return None
         if attempt < MAX_RETRIES:
-            time.sleep(3)
+            time.sleep(5 * attempt)
     return None
 
 

@@ -2,10 +2,10 @@ name: Daily Job Scraper
 
 on:
   schedule:
-    # 8am Auckland NZST (UTC+12) = 20:00 UTC
-    # In NZDT (UTC+13, Oct-Mar) this fires at 9am — close enough
+    # 8am Auckland NZST (UTC+12) = 20:00 UTC previous day
+    # During NZDT (UTC+13, Oct-Mar) this fires at 9am — close enough
     - cron: '0 20 * * *'
-  workflow_dispatch:  # Allow manual trigger from GitHub UI
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -34,6 +34,23 @@ jobs:
 
       - name: Run scraper
         run: python main.py
+        continue-on-error: true
+
+      - name: Ensure jobs_today.html exists
+        run: |
+          if [ ! -f jobs_today.html ]; then
+            TODAY=$(date +%Y-%m-%d)
+            cat > jobs_today.html <<EOF
+          <!DOCTYPE html>
+          <html lang="zh"><head><meta charset="utf-8">
+          <title>今日职位推送 — $TODAY</title>
+          <style>body{font-family:sans-serif;text-align:center;padding:60px;color:#888;}</style>
+          </head><body>
+          <h1>📋 今日职位推送</h1>
+          <p>$TODAY · 抓取失败，请检查 Actions 日志</p>
+          </body></html>
+          EOF
+          fi
 
       - name: Prepare Pages directory
         run: |

@@ -34,6 +34,10 @@ def _build_html(jobs: list[dict]) -> str:
           <div class="tags">{salary_html}{date_html}{location_html}{source_html}</div>
         </div>"""
 
+    empty_msg = ""
+    if not jobs:
+        empty_msg = '<p style="text-align:center;color:#aaa;margin-top:48px">今日暂无新职位</p>'
+
     return f"""<!DOCTYPE html>
 <html lang="zh">
 <head>
@@ -65,27 +69,34 @@ def _build_html(jobs: list[dict]) -> str:
 </head>
 <body>
   <div style="max-width:1200px;margin:0 auto">
-    <h1>📋 今日新增职位</h1>
+    <h1>📋 今日职位推送</h1>
     <p class="subtitle">{today} · 共 {len(jobs)} 个职位</p>
     <div class="grid">{cards}
     </div>
+    {empty_msg}
     <p class="footer">由 job_scraper 自动生成 · {today}</p>
   </div>
 </body>
 </html>"""
 
 
-def save_and_open(jobs: list[dict]) -> bool:
-    if not jobs:
-        logger.info("No new jobs to save.")
-        return False
-
+def save_html(jobs: list[dict]) -> Path:
+    """Write jobs_today.html and return the path. Does not open a browser."""
     html = _build_html(jobs)
     out = Path(OUTPUT_FILE).resolve()
     out.write_text(html, encoding="utf-8")
     logger.info(f"Saved {len(jobs)} jobs to {out}")
+    return out
 
-    # WSL2: convert to Windows path and open with cmd.exe
+
+def save_and_open(jobs: list[dict]) -> bool:
+    """Save jobs_today.html and try to open it in a browser (local use only)."""
+    if not jobs:
+        logger.info("No new jobs to save.")
+        return False
+
+    out = save_html(jobs)
+
     try:
         win_path = subprocess.check_output(["wslpath", "-w", str(out)]).decode().strip()
         subprocess.Popen(["cmd.exe", "/c", "start", win_path])
